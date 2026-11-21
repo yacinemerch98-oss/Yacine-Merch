@@ -45,7 +45,7 @@ import {
   remapBlursForSyncPlan,
   remapLogosForSyncPlan,
 } from '../../server/services/timeline_sync_service';
-import { resolveBlurIntervals } from './blurMasks';
+import { mapBlurToExportCanvasNormalized, resolveBlurIntervals } from './blurMasks';
 
 export interface SmartExportCapabilities {
   webCodecsVideo: boolean;
@@ -743,7 +743,7 @@ function findTimelineClipAtTime(
 
 function seekVideoToExactTime(video: HTMLVideoElement, targetSec: number): Promise<void> {
   const clamped = Math.max(0, Math.min(targetSec, Math.max(0.05, (video.duration || 10) - 0.03)));
-  if (Math.abs(video.currentTime - clamped) <= 0.004 && video.readyState >= 2) {
+  if (Math.abs(video.currentTime - clamped) <= 0.04 && video.readyState >= 2) {
     return Promise.resolve();
   }
   return new Promise<void>((resolve) => {
@@ -755,7 +755,7 @@ function seekVideoToExactTime(video: HTMLVideoElement, targetSec: number): Promi
       video.removeEventListener('seeked', finish);
       resolve();
     };
-    const timer = setTimeout(finish, 400);
+    const timer = setTimeout(finish, 150);
     video.addEventListener('seeked', finish, { once: true });
     video.currentTime = clamped;
   });
@@ -1615,10 +1615,24 @@ export async function renderProjectWithWebCodecs(params: {
                 blur.mode === 'motion' && blur.keyframes && blur.keyframes.length > 0
                   ? interpolateKeyframes(blur.keyframes, t)
                   : blur;
-              const bx = blur.mode === 'full' ? 0 : box.x * targetW;
-              const by = blur.mode === 'full' ? 0 : box.y * targetH;
-              const bw = blur.mode === 'full' ? targetW : box.width * targetW;
-              const bh = blur.mode === 'full' ? targetH : box.height * targetH;
+              const mapped =
+                blur.coordSpace === 'video'
+                  ? mapBlurToExportCanvasNormalized(
+                      { ...blur, x: box.x, y: box.y, width: box.width, height: box.height },
+                      project,
+                      srcW,
+                      srcH,
+                      {
+                        hasCustomCanvasOverride:
+                          hasCustomVideoEdits(project) || canvasConfig.aspectRatio !== 'original',
+                      }
+                    )
+                  : { x: box.x, y: box.y, width: box.width, height: box.height, visible: true };
+              if (!mapped.visible) continue;
+              const bx = blur.mode === 'full' ? 0 : mapped.x * targetW;
+              const by = blur.mode === 'full' ? 0 : mapped.y * targetH;
+              const bw = blur.mode === 'full' ? targetW : mapped.width * targetW;
+              const bh = blur.mode === 'full' ? targetH : mapped.height * targetH;
               ctx.save();
               ctx.globalAlpha = Math.max(0.05, Math.min(1, blur.opacity ?? 1));
               ctx.beginPath();
