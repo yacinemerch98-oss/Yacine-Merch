@@ -769,8 +769,8 @@ function findTimelineClipAtTime(
 }
 
 function seekVideoToExactTime(video: HTMLVideoElement, targetSec: number): Promise<void> {
-  const clamped = Math.max(0, Math.min(targetSec, Math.max(0.05, (video.duration || 10) - 0.03)));
-  if (Math.abs(video.currentTime - clamped) <= 0.04 && video.readyState >= 2) {
+  const clamped = Math.max(0, Math.min(targetSec, Math.max(0.05, (video.duration || 10) - 0.02)));
+  if (Math.abs(video.currentTime - clamped) <= 0.04 && video.readyState >= 2 && !video.seeking) {
     return Promise.resolve();
   }
   return new Promise<void>((resolve) => {
@@ -780,11 +780,31 @@ function seekVideoToExactTime(video: HTMLVideoElement, targetSec: number): Promi
       settled = true;
       clearTimeout(timer);
       video.removeEventListener('seeked', finish);
+      video.removeEventListener('error', finish);
       resolve();
     };
-    const timer = setTimeout(finish, 150);
+    const timer = setTimeout(finish, 350);
     video.addEventListener('seeked', finish, { once: true });
-    video.currentTime = clamped;
+    video.addEventListener('error', finish, { once: true });
+
+    const doSeek = () => {
+      if (settled) return;
+      try {
+        video.currentTime = clamped;
+      } catch {
+        finish();
+      }
+    };
+
+    if (video.seeking) {
+      const onSeekingDone = () => {
+        video.removeEventListener('seeked', onSeekingDone);
+        doSeek();
+      };
+      video.addEventListener('seeked', onSeekingDone, { once: true });
+    } else {
+      doSeek();
+    }
   });
 }
 
@@ -1197,6 +1217,7 @@ export async function renderProjectWithWebCodecs(params: {
     const encodeLoopStart = performance.now();
 
     for (let frameIdx = 0; frameIdx < totalFrames; frameIdx++) {
+      const frameStart = performance.now();
       if (signal?.aborted) throw new DOMException('Export cancelled by user.', 'AbortError');
       if (encoderError) throw encoderError;
 
@@ -1223,6 +1244,15 @@ export async function renderProjectWithWebCodecs(params: {
             lastDecodedSrcFrame = quantizedSrcFrame;
           }
         }
+      }
+
+      const frameDurationMs = performance.now() - frameStart;
+      if (frameIdx === 0 || frameIdx % 90 === 0 || frameDurationMs > 120) {
+        console.log(
+          `[ExportDiag] Frame ${frameIdx + 1}/${totalFrames} | t=${t.toFixed(3)}s | srcTime=${srcTime.toFixed(
+            3
+          )}s | encQueue=${videoEncoder.encodeQueueSize} | dur=${frameDurationMs.toFixed(1)}ms`
+        );
       }
 
       // Evaluate visual effects at t
