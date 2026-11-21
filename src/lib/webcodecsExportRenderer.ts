@@ -705,7 +705,20 @@ function findTimelineClipAtTime(
   timeSec: number,
   origDur: number,
   holds: NonNullable<Project['voice']['syncPlan']>['holds'] | undefined
-): { clip: VideoClip | null; sourceTime: number; isHold: boolean } {
+): { clip: VideoClip; sourceTime: number; isHold: boolean } {
+  const safeClips =
+    clips && clips.length > 0
+      ? clips
+      : [
+          {
+            id: 'default_vclip',
+            sourceStart: 0,
+            sourceEnd: origDur,
+            timelineStart: 0,
+            speed: 1.0,
+          },
+        ];
+
   // Handle flexible sync holds if unedited video clips
   if (holds && holds.length > 0) {
     let accumulatedHold = 0;
@@ -714,17 +727,17 @@ function findTimelineClipAtTime(
       const holdStartOnTimeline = srcAt + accumulatedHold;
       const holdDur = Math.max(0, h.holdDuration || 0);
       if (timeSec >= holdStartOnTimeline && timeSec <= holdStartOnTimeline + holdDur) {
-        return { clip: clips[0] || null, sourceTime: Math.min(origDur - 0.04, srcAt), isHold: true };
+        return { clip: safeClips[0], sourceTime: Math.min(origDur - 0.04, srcAt), isHold: true };
       }
       if (timeSec < holdStartOnTimeline) break;
       accumulatedHold += holdDur;
     }
     const mappedSrc = Math.min(origDur - 0.04, Math.max(0, timeSec - accumulatedHold));
-    return { clip: clips[0] || null, sourceTime: mappedSrc, isHold: false };
+    return { clip: safeClips[0], sourceTime: mappedSrc, isHold: false };
   }
 
-  for (let i = clips.length - 1; i >= 0; i--) {
-    const c = clips[i];
+  for (let i = safeClips.length - 1; i >= 0; i--) {
+    const c = safeClips[i];
     const tlStart = Math.max(0, Number(c.timelineStart || 0));
     const tlDur = getVideoClipTimelineDuration(c);
     const tlEnd = tlStart + tlDur;
@@ -738,7 +751,21 @@ function findTimelineClipAtTime(
       return { clip: c, sourceTime: sTime, isHold: false };
     }
   }
-  return { clip: null, sourceTime: -1, isHold: false };
+
+  // Fallback for gaps or times beyond clips
+  const first = safeClips[0];
+  const last = safeClips[safeClips.length - 1];
+  if (timeSec < Number(first.timelineStart || 0)) {
+    return { clip: first, sourceTime: Number(first.sourceStart || 0), isHold: false };
+  }
+  const lastStart = Number(last.timelineStart || 0);
+  const spd = clampVideoSpeed(last.speed);
+  const localOffset = Math.max(0, timeSec - lastStart);
+  const sTime = Math.min(
+    Math.max(0, Number(last.sourceEnd || origDur) - 0.02),
+    Math.max(0, Number(last.sourceStart || 0) + localOffset * spd)
+  );
+  return { clip: last, sourceTime: sTime, isHold: false };
 }
 
 function seekVideoToExactTime(video: HTMLVideoElement, targetSec: number): Promise<void> {
